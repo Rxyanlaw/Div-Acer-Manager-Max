@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -9,7 +10,9 @@ namespace DivAcerManagerMax;
 
 public partial class InternalsManager : Window
 {
-    private const string logPath = "/var/log/DAMX_Daemon_Log.log";
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "DAMX", "DAMX_Daemon_Log.log");
     private readonly MainWindow _mainWindow;
 
     public InternalsManager(MainWindow mainWindow)
@@ -44,7 +47,14 @@ public partial class InternalsManager : Window
 
     private void DaemonLogsButton_OnClick(object? sender, RoutedEventArgs e)
     {
-        Process.Start("xdg-open", logPath);
+        if (File.Exists(LogPath))
+        {
+            Process.Start(new ProcessStartInfo(LogPath) { UseShellExecute = true });
+        }
+        else
+        {
+            ShowMessagebox("Log File Not Found", $"The log file was not found at: {LogPath}");
+        }
     }
 
 

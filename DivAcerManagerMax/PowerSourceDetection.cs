@@ -1,29 +1,17 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
+using System.Management;
 using System.Timers;
 using Avalonia.Controls;
 using Avalonia.Threading;
 
 public class PowerSourceDetection
 {
-    private readonly List<string> _possiblePowerSupplyPaths;
     private readonly Timer _powerSourceCheckTimer;
     private readonly ToggleSwitch _powerToggleSwitch;
 
     public PowerSourceDetection(ToggleSwitch powerToggleSwitch)
     {
         _powerToggleSwitch = powerToggleSwitch;
-
-        // Common paths for power supply status on Linux systems
-        _possiblePowerSupplyPaths = new List<string>
-        {
-            "/sys/class/power_supply/AC/online",
-            "/sys/class/power_supply/ACAD/online",
-            "/sys/class/power_supply/ADP1/online",
-            "/sys/class/power_supply/AC0/online"
-        };
 
         // Initialize and start the timer to check power source every 5 seconds
         _powerSourceCheckTimer = new Timer(5000);
@@ -35,7 +23,7 @@ public class PowerSourceDetection
         UpdatePowerSourceStatus();
     }
 
-    private void OnTimerElapsed(object sender, ElapsedEventArgs e)
+    private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
     {
         UpdatePowerSourceStatus();
     }
@@ -52,16 +40,25 @@ public class PowerSourceDetection
     {
         try
         {
-            // Try each possible path for power supply status
-            foreach (var path in _possiblePowerSupplyPaths)
-                if (File.Exists(path))
+            // Use WMI to check power status on Windows
+            using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Battery");
+            foreach (ManagementObject battery in searcher.Get())
+            {
+                var batteryStatus = battery["BatteryStatus"];
+                if (batteryStatus != null)
                 {
-                    var status = File.ReadAllText(path).Trim();
-                    return status == "1";
+                    // BatteryStatus values:
+                    // 1 = Discharging, 2 = AC connected (not charging), 
+                    // 3 = Fully Charged, 4 = Low, 5 = Critical,
+                    // 6 = Charging, 7 = Charging and High, 8 = Charging and Low,
+                    // 9 = Charging and Critical, 10 = Undefined, 11 = Partially Charged
+                    var status = Convert.ToInt32(batteryStatus);
+                    return status != 1 && status != 4 && status != 5; // Not on battery power
                 }
+            }
 
-            // If no power supply file is found, try to check using UPower command-line tool
-            return CheckUsingUPower();
+            // Fallback: Check using SystemInformation
+            return CheckUsingSystemPowerStatus();
         }
         catch (Exception ex)
         {
@@ -70,59 +67,24 @@ public class PowerSourceDetection
         }
     }
 
-    private bool CheckUsingUPower()
+    private bool CheckUsingSystemPowerStatus()
     {
         try
         {
-            using (var process = new Process())
+            // Use System.Windows.Forms or P/Invoke for GetSystemPowerStatus
+            // For simplicity, use WMI as primary method
+            using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_PowerMeter");
+            foreach (ManagementObject meter in searcher.Get())
             {
-                process.StartInfo.FileName = "upower";
-                process.StartInfo.Arguments = "-i /org/freedesktop/UPower/devices/line_power_AC";
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.CreateNoWindow = true;
-
-                process.Start();
-                var output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-
-                // Check if the output contains the online status
-                if (output.Contains("online:") && output.Contains("yes")) return true;
+                // If we have any power meter reading, we're likely plugged in
+                return true;
             }
         }
         catch
         {
-            // UPower command failed, try alternative method
-            return CheckUsingLsAcpi();
+            // WMI query failed, assume battery power
         }
 
         return false;
-    }
-
-    private bool CheckUsingLsAcpi()
-    {
-        try
-        {
-            using (var process = new Process())
-            {
-                process.StartInfo.FileName = "acpi";
-                process.StartInfo.Arguments = "-a";
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.CreateNoWindow = true;
-
-                process.Start();
-                var output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-
-                // Check if the output indicates AC adapter is on-line
-                return output.Contains("on-line");
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error checking ACPI power status: {ex.Message}");
-            return false;
-        }
     }
 }

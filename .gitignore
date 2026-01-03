@@ -1,6 +1,10 @@
 
 DivAcerManagerMax/obj/
 
+DivAcerManagerMax/bin/Release/net9.0-windows/
+
+DivAcerManagerMax/bin/Debug/net9.0-windows/
+
 DivAcerManagerMax/bin/Release/net9.0/linux-x64/
 
 DivAcerManagerMax/bin/Debug/net9.0/
@@ -14,3 +18,5 @@ buildPublish/
 DAMM-Daemon/build/
 
 DAMM-Daemon/dist/
+
+DAMM-Daemon/__pycache__/

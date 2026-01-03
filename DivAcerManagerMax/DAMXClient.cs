@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net.Sockets;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 namespace DivAcerManagerMax;
 
 /// <summary>
-///     Client for communicating with the DAMX-Daemon over Unix socket
+///     Client for communicating with the DAMX-Daemon over Named Pipes (Windows)
 /// </summary>
 public class DAMXClient : IDisposable
 {
-    private const string SocketPath = "/var/run/DAMX.sock";
+    private const string PipeName = "DAMX";
 
     /// <summary>
     ///     Send a command to the DAMX-Daemon and receive response
@@ -25,12 +25,13 @@ public class DAMXClient : IDisposable
     private const int MaxRetryAttempts = 3;
 
     private const int RetryDelayMs = 500;
+    private const int ConnectionTimeoutMs = 5000;
 
     // Cache of available features
     private HashSet<string> _availableFeatures = new();
 
     private bool _disposed;
-    private Socket _socket;
+    private NamedPipeClientStream? _pipeClient;
 
     public DAMXClient()
     {
@@ -79,11 +80,10 @@ public class DAMXClient : IDisposable
         {
             if (IsConnected && await ValidateConnection()) return true;
 
-            _socket?.Dispose();
-            _socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.IP);
-            var endpoint = new UnixDomainSocketEndPoint(SocketPath);
+            _pipeClient?.Dispose();
+            _pipeClient = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 
-            await _socket.ConnectAsync(endpoint);
+            await _pipeClient.ConnectAsync(ConnectionTimeoutMs);
             IsConnected = true;
 
             // Get available features upon connection
@@ -127,14 +127,14 @@ public class DAMXClient : IDisposable
     }
 
     /// <summary>
-    ///     Disconnect from the DAMX-Daemon Unix socket
+    ///     Disconnect from the DAMX-Daemon Named Pipe
     /// </summary>
     public void Disconnect()
     {
         if (IsConnected)
             try
             {
-                _socket?.Close();
+                _pipeClient?.Close();
             }
             catch (Exception ex)
             {
@@ -146,7 +146,7 @@ public class DAMXClient : IDisposable
             }
     }
 
-    public async Task<JsonDocument> SendCommandAsync(string command, Dictionary<string, object> parameters = null)
+    public async Task<JsonDocument> SendCommandAsync(string command, Dictionary<string, object>? parameters = null)
     {
         var attempt = 0;
         while (attempt < MaxRetryAttempts)
@@ -167,16 +167,41 @@ public class DAMXClient : IDisposable
                 var requestJson = JsonSerializer.Serialize(request);
                 var requestBytes = Encoding.UTF8.GetBytes(requestJson);
 
-                // Send request
-                await _socket.SendAsync(requestBytes, SocketFlags.None);
+                // Send request length first (4 bytes), then the message
+                var lengthBytes = BitConverter.GetBytes(requestBytes.Length);
+                await _pipeClient!.WriteAsync(lengthBytes, 0, lengthBytes.Length);
+                await _pipeClient.WriteAsync(requestBytes, 0, requestBytes.Length);
+                await _pipeClient.FlushAsync();
 
-                // Receive response
-                var buffer = new byte[4096];
-                var received = await _socket.ReceiveAsync(buffer, SocketFlags.None);
-
-                if (received > 0)
+                // Receive response length first
+                var responseLengthBytes = new byte[4];
+                var bytesRead = await _pipeClient.ReadAsync(responseLengthBytes, 0, 4);
+                if (bytesRead == 0)
                 {
-                    var responseJson = Encoding.UTF8.GetString(buffer, 0, received);
+                    IsConnected = false;
+                    attempt++;
+                    await Task.Delay(RetryDelayMs);
+                    continue;
+                }
+                var responseLength = BitConverter.ToInt32(responseLengthBytes, 0);
+
+                // Read the full response
+                var buffer = new byte[responseLength];
+                var totalRead = 0;
+                while (totalRead < responseLength)
+                {
+                    var read = await _pipeClient.ReadAsync(buffer, totalRead, responseLength - totalRead);
+                    if (read == 0)
+                    {
+                        IsConnected = false;
+                        break;
+                    }
+                    totalRead += read;
+                }
+
+                if (totalRead > 0)
+                {
+                    var responseJson = Encoding.UTF8.GetString(buffer, 0, totalRead);
                     return JsonDocument.Parse(responseJson);
                 }
 
@@ -185,9 +210,7 @@ public class DAMXClient : IDisposable
                 attempt++;
                 await Task.Delay(RetryDelayMs);
             }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset ||
-                                             ex.SocketErrorCode == SocketError.Shutdown ||
-                                             ex.SocketErrorCode == SocketError.ConnectionAborted)
+            catch (IOException)
             {
                 // Connection was reset - try to reconnect
                 IsConnected = false;
@@ -479,7 +502,7 @@ public class DAMXClient : IDisposable
         if (disposing)
         {
             Disconnect();
-            _socket?.Dispose();
+            _pipeClient?.Dispose();
         }
 
         _disposed = true;

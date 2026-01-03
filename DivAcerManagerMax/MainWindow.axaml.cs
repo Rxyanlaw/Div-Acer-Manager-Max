@@ -512,21 +512,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            if (File.Exists("/sys/class/dmi/id/product_name"))
-                return File.ReadAllText("/sys/class/dmi/id/product_name").Trim();
-
-            var startInfo = new ProcessStartInfo
+            // Use WMI on Windows to get laptop model
+            using var searcher = new System.Management.ManagementObjectSearcher("SELECT * FROM Win32_ComputerSystem");
+            foreach (System.Management.ManagementObject system in searcher.Get())
             {
-                FileName = "dmidecode",
-                Arguments = "-s system-product-name",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(startInfo);
-            process?.WaitForExit();
-            return process?.StandardOutput.ReadToEnd().Trim() ?? "Unknown";
+                var manufacturer = system["Manufacturer"]?.ToString() ?? "";
+                var model = system["Model"]?.ToString() ?? "";
+                return $"{manufacturer} {model}".Trim();
+            }
+            return "Unknown";
         }
         catch (Exception ex)
         {
@@ -570,19 +564,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void UpdatesButton_OnClick(object? sender, RoutedEventArgs e)
     {
-        Process.Start(new ProcessStartInfo("xdg-open", "https://github.com/PXDiv/Div-Acer-Manager-Max/releases")
+        Process.Start(new ProcessStartInfo("https://github.com/PXDiv/Div-Acer-Manager-Max/releases")
             { UseShellExecute = true });
     }
 
     private void StarProject_OnClick(object? sender, RoutedEventArgs e)
     {
-        Process.Start(new ProcessStartInfo("xdg-open", "https://github.com/PXDiv/Div-Acer-Manager-Max/")
+        Process.Start(new ProcessStartInfo("https://github.com/PXDiv/Div-Acer-Manager-Max/")
             { UseShellExecute = true });
     }
 
     private void IssuePageButton_OnClick(object? sender, RoutedEventArgs e)
     {
-        Process.Start(new ProcessStartInfo("xdg-open", "https://github.com/PXDiv/Div-Acer-Manager-Max/issues")
+        Process.Start(new ProcessStartInfo("https://github.com/PXDiv/Div-Acer-Manager-Max/issues")
             { UseShellExecute = true });
     }
 
