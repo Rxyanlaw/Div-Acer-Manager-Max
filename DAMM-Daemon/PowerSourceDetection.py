@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
 # DAMX Power Source Detection - Monitors power source and adjusts thermal profiles accordingly
+# Windows version using WMI
 
-import os
 import logging
 import subprocess
 from threading import Timer
+
+# Try to import WMI at module level with fallback
+try:
+    import wmi
+    WMI_AVAILABLE = True
+except ImportError:
+    WMI_AVAILABLE = False
 
 # Get logger from main daemon
 log = logging.getLogger("DAMXDaemon")
 
 class PowerSourceDetector:
-    """Detects power source and manages automatic mode switching"""
+    """Detects power source and manages automatic mode switching on Windows"""
 
     def __init__(self, manager):
         self.manager = manager
         self.current_source = None
         self.check_interval = 5  # seconds
         self.timer = None
+        self.wmi_connection = None
         
-        log.info("PowerSourceDetector initialized")
+        if WMI_AVAILABLE:
+            try:
+                self.wmi_connection = wmi.WMI()
+            except Exception as e:
+                log.warning(f"Could not initialize WMI: {e}")
         
-        self.possible_power_supply_paths = [
-            "/sys/class/power_supply/AC/online",
-            "/sys/class/power_supply/ACAD/online",
-            "/sys/class/power_supply/ADP1/online",
-            "/sys/class/power_supply/AC0/online"
-        ]
+        log.info("PowerSourceDetector initialized (Windows)")
 
     def start_monitoring(self):
         """Start periodic power source checking"""
@@ -52,48 +59,41 @@ class PowerSourceDetector:
         self.timer.start()
 
     def _is_ac_connected(self) -> bool:
-        """Check if AC power is connected"""
+        """Check if AC power is connected using WMI"""
         try:
-            # Try each possible path for power supply status
-            for path in self.possible_power_supply_paths:
-                if os.path.exists(path):
-                    with open(path, 'r') as f:
-                        status = f.read().strip()
-                        return status == "1"
-
-            # If no power supply file is found, try command-line tools
-            return self._check_using_upower() or self._check_using_acpi()
-
+            if self.wmi_connection:
+                for battery in self.wmi_connection.Win32_Battery():
+                    # BatteryStatus: 1 = Discharging, 2+ = Charging/AC
+                    status = battery.BatteryStatus
+                    if status and status != 1:
+                        return True
+                    return False
+                
+                # No battery found, assume desktop (always on AC)
+                return True
+            else:
+                # WMI not available, try powershell fallback
+                return self._check_using_powershell()
+            
         except Exception as e:
             log.error(f"Error checking power status: {e}")
             return False
 
-    def _check_using_upower(self) -> bool:
-        """Check power status using upower"""
+    def _check_using_powershell(self) -> bool:
+        """Check power status using PowerShell"""
         try:
             result = subprocess.run(
-                ["upower", "-i", "/org/freedesktop/UPower/devices/line_power_AC"],
+                ["powershell", "-Command", 
+                 "(Get-CimInstance Win32_Battery).BatteryStatus"],
                 capture_output=True,
                 text=True,
                 check=True
             )
-            return "online: yes" in result.stdout
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            log.error(f"upower check failed: {e}")
-            return False
-
-    def _check_using_acpi(self) -> bool:
-        """Check power status using acpi"""
-        try:
-            result = subprocess.run(
-                ["acpi", "-a"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            return "on-line" in result.stdout
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            log.error(f"acpi check failed: {e}")
+            status = result.stdout.strip()
+            # Status 1 = discharging (on battery), anything else = on AC
+            return status != "1"
+        except Exception as e:
+            log.error(f"PowerShell check failed: {e}")
             return False
 
     def _handle_power_change(self, is_plugged_in: bool):
@@ -111,7 +111,7 @@ class PowerSourceDetector:
             # On battery power - enforce balanced or eco mode
             log.info("Switched to battery power")
 
-            if current_profile not in ["balanced", "quiet", "power-saver"]:
+            if current_profile not in ["balanced", "quiet", "low-power"]:
                 # If current profile isn't battery-friendly, switch to balanced
                 if "balanced" in available_profiles:
                     log.info("Auto-switching to balanced mode for battery power")
@@ -119,8 +119,8 @@ class PowerSourceDetector:
                 elif "quiet" in available_profiles:
                     log.info("Auto-switching to quiet mode for battery power")
                     self.manager.set_thermal_profile("quiet")
-                elif "power-saver" in available_profiles:
-                    log.info("Auto-switching to power-saver mode for battery power")
-                    self.manager.set_thermal_profile("power-saver")
+                elif "low-power" in available_profiles:
+                    log.info("Auto-switching to low-power mode for battery power")
+                    self.manager.set_thermal_profile("low-power")
                 else:
                     log.warning("No battery-friendly thermal profile available")

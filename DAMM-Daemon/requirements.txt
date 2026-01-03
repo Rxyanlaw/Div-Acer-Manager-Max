@@ -1,0 +1,5 @@
+# DAMX Daemon Windows Dependencies
+# Install with: pip install -r requirements.txt
+
+WMI>=1.5.1
+pywin32>=306
