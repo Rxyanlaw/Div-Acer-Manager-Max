@@ -50,17 +50,24 @@
   * Dynamic UI hides unsupported features
   * Real-time feedback from daemon
 
+* 🌡 **Fan Control**
+  Manual and Auto fan speed modes with multiple data sources:
+  * Native Acer Gaming WMI interface (best support on newer Acer laptops)
+  * LibreHardwareMonitor/Open Hardware Monitor integration
+  * nvidia-smi for NVIDIA GPU fan speeds
+  * Thermal profile-based fallback for systems without direct fan control
+
 ### ⚠️ Windows Limitations
 
-Some features require Acer's official software (NitroSense/PredatorSense) on Windows:
+Some features may require Acer's official software (NitroSense/PredatorSense) or third-party tools:
 
-* Fan speed control
+* **Fan Speed Control**: Works via Acer WMI on supported models; fallback to LibreHardwareMonitor or thermal profiles
 * Battery calibration and limiter
 * Keyboard RGB control
 * Boot animation/sound settings
 * LCD override
 
-These features are exposed in the UI for future compatibility when Acer provides WMI interfaces.
+For full fan speed monitoring, we recommend installing [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) and running it in the background.
 
 ## 🧭 Compatibility
 

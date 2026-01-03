@@ -735,7 +735,38 @@ public partial class Dashboard : UserControl, INotifyPropertyChanged
             // On Windows, fan speeds are typically accessed through:
             // 1. Acer WMI ACPI methods
             // 2. Open Hardware Monitor WMI namespace
-            // 3. Vendor-specific tools
+            // 3. LibreHardwareMonitor WMI namespace
+            // 4. Vendor-specific tools (nvidia-smi)
+
+            // Check for Acer Gaming WMI first (native Acer fan control)
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", 
+                    "SELECT * FROM AcerGaming_FanSpeed");
+                var fans = searcher.Get().Cast<ManagementObject>().ToList();
+                if (fans.Any())
+                {
+                    _systemInfoPaths["fan_source"] = "AcerWMI";
+                    Console.WriteLine("Found Acer Gaming WMI for fan speed");
+                    return;
+                }
+            }
+            catch { /* Acer WMI not available */ }
+
+            // Check if LibreHardwareMonitor is available (preferred over OHM)
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\LibreHardwareMonitor", 
+                    "SELECT * FROM Sensor WHERE SensorType='Fan'");
+                var fans = searcher.Get().Cast<ManagementObject>().ToList();
+                if (fans.Any())
+                {
+                    _systemInfoPaths["fan_source"] = "LibreHardwareMonitor";
+                    Console.WriteLine("Found LibreHardwareMonitor for fan speed");
+                    return;
+                }
+            }
+            catch { /* LibreHardwareMonitor not installed */ }
 
             // Check if Open Hardware Monitor is available
             try
@@ -746,6 +777,7 @@ public partial class Dashboard : UserControl, INotifyPropertyChanged
                 if (fans.Any())
                 {
                     _systemInfoPaths["fan_source"] = "OpenHardwareMonitor";
+                    Console.WriteLine("Found OpenHardwareMonitor for fan speed");
                     return;
                 }
             }
@@ -758,6 +790,7 @@ public partial class Dashboard : UserControl, INotifyPropertyChanged
                 if (!string.IsNullOrWhiteSpace(nvidiaSmiOutput) && nvidiaSmiOutput.Contains("%"))
                 {
                     _systemInfoPaths["gpu_fan_nvidia_smi"] = "true";
+                    Console.WriteLine("Found nvidia-smi for GPU fan speed");
                 }
             }
         }
@@ -778,8 +811,58 @@ public partial class Dashboard : UserControl, INotifyPropertyChanged
             var cpuFanSpeed = 0;
             var gpuFanSpeed = 0;
 
-            // Try Open Hardware Monitor first
-            if (_systemInfoPaths.ContainsKey("fan_source") && _systemInfoPaths["fan_source"] == "OpenHardwareMonitor")
+            // Method 1: Try Acer Gaming WMI
+            if (_systemInfoPaths.ContainsKey("fan_source") && _systemInfoPaths["fan_source"] == "AcerWMI")
+            {
+                try
+                {
+                    using var searcher = new ManagementObjectSearcher(@"root\WMI", 
+                        "SELECT * FROM AcerGaming_FanSpeed");
+                    foreach (ManagementObject fan in searcher.Get())
+                    {
+                        var cpuSpeed = fan["CpuFanSpeed"];
+                        var gpuSpeed = fan["GpuFanSpeed"];
+                        if (cpuSpeed != null)
+                            cpuFanSpeed = Convert.ToInt32(cpuSpeed);
+                        if (gpuSpeed != null)
+                            gpuFanSpeed = Convert.ToInt32(gpuSpeed);
+                    }
+                }
+                catch { /* Acer WMI query failed */ }
+            }
+
+            // Method 2: Try LibreHardwareMonitor
+            if (cpuFanSpeed == 0 && _systemInfoPaths.ContainsKey("fan_source") && 
+                _systemInfoPaths["fan_source"] == "LibreHardwareMonitor")
+            {
+                try
+                {
+                    using var searcher = new ManagementObjectSearcher(@"root\LibreHardwareMonitor", 
+                        "SELECT * FROM Sensor WHERE SensorType='Fan'");
+                    foreach (ManagementObject sensor in searcher.Get())
+                    {
+                        var name = sensor["Name"]?.ToString()?.ToLower() ?? "";
+                        var value = sensor["Value"];
+                        if (value != null)
+                        {
+                            var rpm = Convert.ToInt32(value);
+                            if (name.Contains("cpu") || name.Contains("#1"))
+                                cpuFanSpeed = rpm;
+                            else if (name.Contains("gpu") || name.Contains("#2"))
+                                gpuFanSpeed = rpm;
+                            else if (cpuFanSpeed == 0)
+                                cpuFanSpeed = rpm;
+                            else if (gpuFanSpeed == 0)
+                                gpuFanSpeed = rpm;
+                        }
+                    }
+                }
+                catch { /* LibreHardwareMonitor query failed */ }
+            }
+
+            // Method 3: Try Open Hardware Monitor
+            if (cpuFanSpeed == 0 && _systemInfoPaths.ContainsKey("fan_source") && 
+                _systemInfoPaths["fan_source"] == "OpenHardwareMonitor")
             {
                 try
                 {
@@ -803,7 +886,7 @@ public partial class Dashboard : UserControl, INotifyPropertyChanged
                 catch { /* Open Hardware Monitor query failed */ }
             }
 
-            // Try nvidia-smi for GPU fan
+            // Method 4: Try nvidia-smi for GPU fan
             if (gpuFanSpeed == 0 && _systemInfoPaths.ContainsKey("gpu_fan_nvidia_smi"))
             {
                 var nvidiaSmiOutput = RunCommand("nvidia-smi", "--query-gpu=fan.speed --format=csv,noheader");

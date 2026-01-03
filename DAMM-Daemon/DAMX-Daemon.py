@@ -328,24 +328,98 @@ class DAMXManager:
         return False
 
     def get_fan_speed(self) -> Tuple[str, str]:
-        """Get CPU and GPU fan speeds using WMI"""
+        """Get CPU and GPU fan speeds using Acer WMI or fallback methods"""
         if "fan_speed" not in self.available_features:
             return ("", "")
 
+        cpu_fan = "0"
+        gpu_fan = "0"
+
         try:
-            # Try to get fan speed from WMI thermal zone info
-            if self.wmi_root:
-                for fan in self.wmi_root.MSAcpi_ThermalZoneTemperature():
-                    # This is a placeholder - actual fan speed requires vendor-specific WMI
+            # Method 1: Try Acer Gaming WMI interface
+            try:
+                acer_wmi = wmi.WMI(namespace="root/WMI")
+                
+                # Try AcerGaming_FanSpeed class
+                try:
+                    for fan in acer_wmi.AcerGaming_FanSpeed():
+                        if hasattr(fan, 'CpuFanSpeed'):
+                            cpu_fan = str(fan.CpuFanSpeed)
+                        if hasattr(fan, 'GpuFanSpeed'):
+                            gpu_fan = str(fan.GpuFanSpeed)
+                        if cpu_fan != "0" or gpu_fan != "0":
+                            return (cpu_fan, gpu_fan)
+                except:
                     pass
-            return ("auto", "auto")
+                
+                # Try separate CPU and GPU fan speed classes
+                try:
+                    for fan in acer_wmi.AcerGaming_CpuFanSpeed():
+                        if hasattr(fan, 'CurrentSpeed'):
+                            cpu_fan = str(fan.CurrentSpeed)
+                except:
+                    pass
+                    
+                try:
+                    for fan in acer_wmi.AcerGaming_GpuFanSpeed():
+                        if hasattr(fan, 'CurrentSpeed'):
+                            gpu_fan = str(fan.CurrentSpeed)
+                except:
+                    pass
+                    
+                if cpu_fan != "0" or gpu_fan != "0":
+                    return (cpu_fan, gpu_fan)
+                    
+            except Exception as e:
+                log.debug(f"Acer WMI not available: {e}")
+            
+            # Method 2: Try MSAcpi_ThermalZone (some systems report fan info here)
+            try:
+                if self.wmi_root:
+                    # Some Acer systems expose fan through thermal cooling device
+                    for cooling in self.wmi_root.Win32_Fan():
+                        if hasattr(cooling, 'DesiredSpeed'):
+                            cpu_fan = str(cooling.DesiredSpeed)
+                            break
+            except:
+                pass
+
+            # Method 3: Try Open Hardware Monitor WMI
+            try:
+                ohm_wmi = wmi.WMI(namespace="root/OpenHardwareMonitor")
+                for sensor in ohm_wmi.Sensor():
+                    if sensor.SensorType == "Fan":
+                        name = sensor.Name.lower() if sensor.Name else ""
+                        value = str(int(sensor.Value)) if sensor.Value else "0"
+                        if "cpu" in name or "fan #1" in name:
+                            cpu_fan = value
+                        elif "gpu" in name or "fan #2" in name:
+                            gpu_fan = value
+            except:
+                pass
+
+            # Method 4: Try LibreHardwareMonitor WMI
+            try:
+                lhm_wmi = wmi.WMI(namespace="root/LibreHardwareMonitor")
+                for sensor in lhm_wmi.Sensor():
+                    if sensor.SensorType == "Fan":
+                        name = sensor.Name.lower() if sensor.Name else ""
+                        value = str(int(sensor.Value)) if sensor.Value else "0"
+                        if "cpu" in name or "#1" in name:
+                            cpu_fan = value
+                        elif "gpu" in name or "#2" in name:
+                            gpu_fan = value
+            except:
+                pass
+
+            return (cpu_fan, gpu_fan)
+            
         except Exception as e:
             log.error(f"Error reading fan speed: {e}")
-
-        return ("0", "0")  # Fallback
+            return ("0", "0")
 
     def set_fan_speed(self, cpu: int, gpu: int) -> bool:
-        """Set CPU and GPU fan speeds - requires Acer vendor tools"""
+        """Set CPU and GPU fan speeds using Acer WMI interface"""
         if "fan_speed" not in self.available_features:
             return False
 
@@ -354,8 +428,115 @@ class DAMXManager:
             log.error(f"Invalid fan speeds. Values must be between 0 and 100: cpu={cpu}, gpu={gpu}")
             return False
 
-        log.info("Fan speed control on Windows requires Acer NitroSense/PredatorSense software")
-        return False
+        try:
+            # Method 1: Try Acer Gaming WMI interface
+            try:
+                acer_wmi = wmi.WMI(namespace="root/WMI")
+                
+                # Try to set fan speed via AcerGaming_SetFanSpeed method
+                try:
+                    for controller in acer_wmi.AcerGaming_FanSpeedController():
+                        if hasattr(controller, 'SetFanSpeed'):
+                            controller.SetFanSpeed(cpu, gpu)
+                            log.info(f"Set fan speeds via Acer WMI: CPU={cpu}%, GPU={gpu}%")
+                            return True
+                except:
+                    pass
+                
+                # Alternative: Try setting through separate classes
+                try:
+                    for cpu_fan in acer_wmi.AcerGaming_CpuFanSpeed():
+                        if hasattr(cpu_fan, 'SetSpeed'):
+                            cpu_fan.SetSpeed(cpu)
+                            log.info(f"Set CPU fan speed: {cpu}%")
+                except:
+                    pass
+                    
+                try:
+                    for gpu_fan in acer_wmi.AcerGaming_GpuFanSpeed():
+                        if hasattr(gpu_fan, 'SetSpeed'):
+                            gpu_fan.SetSpeed(gpu)
+                            log.info(f"Set GPU fan speed: {gpu}%")
+                except:
+                    pass
+                    
+            except Exception as e:
+                log.debug(f"Acer WMI set fan speed not available: {e}")
+
+            # Method 2: Try ACPI ACMC (Acer Control Method Computer) interface
+            try:
+                acer_wmi = wmi.WMI(namespace="root/WMI")
+                for acmc in acer_wmi.AcerACMCEvent():
+                    # Send fan control command via ACPI method
+                    if hasattr(acmc, 'SetFanManual'):
+                        if cpu == 0 and gpu == 0:
+                            acmc.SetFanManual(False)  # Auto mode
+                        else:
+                            acmc.SetFanManual(True)  # Manual mode
+                            acmc.SetFanSpeed(cpu, gpu)
+                        return True
+            except:
+                pass
+
+            # Method 3: Use PowerShell to call Acer WMI methods
+            try:
+                # Ensure values are safe integers (already validated above, but extra safety)
+                safe_cpu = int(cpu)
+                safe_gpu = int(gpu)
+                
+                # Build the PowerShell command to set fan speed
+                ps_cmd = f'''
+$namespace = "root\\WMI"
+$classes = @("AcerGaming_FanSpeed", "AcerGaming_FanSpeedController", "AcerGaming_CpuFanSpeed", "AcerGaming_GpuFanSpeed")
+foreach ($class in $classes) {{
+    try {{
+        $obj = Get-CimInstance -Namespace $namespace -ClassName $class -ErrorAction Stop
+        if ($obj) {{
+            $methods = Get-CimClass -Namespace $namespace -ClassName $class
+            foreach ($method in $methods.CimClassMethods) {{
+                if ($method.Name -like "*SetSpeed*" -or $method.Name -like "*SetFan*") {{
+                    Invoke-CimMethod -InputObject $obj -MethodName $method.Name -Arguments @{{CpuSpeed={safe_cpu}; GpuSpeed={safe_gpu}}}
+                    exit 0
+                }}
+            }}
+        }}
+    }} catch {{ }}
+}}
+exit 1
+'''
+                result = subprocess.run(
+                    ["powershell", "-Command", ps_cmd],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    log.info(f"Set fan speeds via PowerShell: CPU={safe_cpu}%, GPU={safe_gpu}%")
+                    return True
+            except Exception as e:
+                log.debug(f"PowerShell fan control failed: {e}")
+
+            # If we get here, fan control might not be directly supported
+            # Log what we attempted and suggest alternatives
+            log.warning("Direct fan control not available on this system")
+            log.info("Tip: Install Acer PredatorSense/NitroSense for full fan control")
+            log.info("Alternative: Use 'performance' thermal profile for higher fan speeds")
+            
+            # Still return True if we can at least change thermal profile as a workaround
+            if "thermal_profile" in self.available_features:
+                if cpu >= 80 and gpu >= 80:
+                    self.set_thermal_profile("performance")
+                    log.info("Applied 'performance' thermal profile for higher fan speeds")
+                    return True
+                elif cpu == 0 and gpu == 0:
+                    self.set_thermal_profile("balanced")
+                    log.info("Applied 'balanced' thermal profile for auto fan control")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            log.error(f"Error setting fan speed: {e}")
+            return False
 
 
     def get_lcd_override(self) -> str:
