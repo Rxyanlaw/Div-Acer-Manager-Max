@@ -571,17 +571,24 @@ public partial class Dashboard : UserControl, INotifyPropertyChanged
         {
             // Try to get CPU temperature using WMI (MSAcpi_ThermalZoneTemperature)
             // Note: This requires admin privileges on Windows
-            using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM MSAcpi_ThermalZoneTemperature");
-            foreach (ManagementObject temp in searcher.Get())
+            try
             {
-                var currentTemp = temp["CurrentTemperature"];
-                if (currentTemp != null)
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM MSAcpi_ThermalZoneTemperature");
+                foreach (ManagementObject temp in searcher.Get())
                 {
-                    // Temperature is in tenths of Kelvin, convert to Celsius
-                    var kelvinTenths = Convert.ToDouble(currentTemp);
-                    var celsius = (kelvinTenths / 10.0) - 273.15;
-                    return Math.Round(celsius, 1);
+                    var currentTemp = temp["CurrentTemperature"];
+                    if (currentTemp != null)
+                    {
+                        // Temperature is in tenths of Kelvin, convert to Celsius
+                        var kelvinTenths = Convert.ToDouble(currentTemp);
+                        var celsius = (kelvinTenths / 10.0) - 273.15;
+                        return Math.Round(celsius, 1);
+                    }
                 }
+            }
+            catch (ManagementException)
+            {
+                // MSAcpi_ThermalZoneTemperature may require admin privileges
             }
             
             // Fallback: Try Open Hardware Monitor WMI (if installed)

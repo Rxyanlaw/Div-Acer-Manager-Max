@@ -6,6 +6,13 @@ import logging
 import subprocess
 from threading import Timer
 
+# Try to import WMI at module level with fallback
+try:
+    import wmi
+    WMI_AVAILABLE = True
+except ImportError:
+    WMI_AVAILABLE = False
+
 # Get logger from main daemon
 log = logging.getLogger("DAMXDaemon")
 
@@ -17,6 +24,13 @@ class PowerSourceDetector:
         self.current_source = None
         self.check_interval = 5  # seconds
         self.timer = None
+        self.wmi_connection = None
+        
+        if WMI_AVAILABLE:
+            try:
+                self.wmi_connection = wmi.WMI()
+            except Exception as e:
+                log.warning(f"Could not initialize WMI: {e}")
         
         log.info("PowerSourceDetector initialized (Windows)")
 
@@ -47,22 +61,20 @@ class PowerSourceDetector:
     def _is_ac_connected(self) -> bool:
         """Check if AC power is connected using WMI"""
         try:
-            import wmi
-            c = wmi.WMI()
+            if self.wmi_connection:
+                for battery in self.wmi_connection.Win32_Battery():
+                    # BatteryStatus: 1 = Discharging, 2+ = Charging/AC
+                    status = battery.BatteryStatus
+                    if status and status != 1:
+                        return True
+                    return False
+                
+                # No battery found, assume desktop (always on AC)
+                return True
+            else:
+                # WMI not available, try powershell fallback
+                return self._check_using_powershell()
             
-            for battery in c.Win32_Battery():
-                # BatteryStatus: 1 = Discharging, 2+ = Charging/AC
-                status = battery.BatteryStatus
-                if status and status != 1:
-                    return True
-                return False
-            
-            # No battery found, assume desktop (always on AC)
-            return True
-            
-        except ImportError:
-            # WMI not available, try powershell fallback
-            return self._check_using_powershell()
         except Exception as e:
             log.error(f"Error checking power status: {e}")
             return False
@@ -72,7 +84,7 @@ class PowerSourceDetector:
         try:
             result = subprocess.run(
                 ["powershell", "-Command", 
-                 "(Get-WmiObject Win32_Battery).BatteryStatus"],
+                 "(Get-CimInstance Win32_Battery).BatteryStatus"],
                 capture_output=True,
                 text=True,
                 check=True

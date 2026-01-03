@@ -25,6 +25,7 @@ public class PowerSourceDetection
 
     private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
     {
+        _ = sender; // Unused parameter
         UpdatePowerSourceStatus();
     }
 
@@ -69,22 +70,8 @@ public class PowerSourceDetection
 
     private bool CheckUsingSystemPowerStatus()
     {
-        try
-        {
-            // Use System.Windows.Forms or P/Invoke for GetSystemPowerStatus
-            // For simplicity, use WMI as primary method
-            using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_PowerMeter");
-            foreach (ManagementObject meter in searcher.Get())
-            {
-                // If we have any power meter reading, we're likely plugged in
-                return true;
-            }
-        }
-        catch
-        {
-            // WMI query failed, assume battery power
-        }
-
+        // This is a fallback method - not typically needed as Win32_Battery works reliably
+        // Return false to indicate we couldn't determine power status via this method
         return false;
     }
 }

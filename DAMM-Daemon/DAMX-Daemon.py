@@ -16,15 +16,27 @@ import configparser
 import traceback
 from pathlib import Path
 from enum import Enum
-from PowerSourceDetection import PowerSourceDetector 
 from typing import Dict, List, Tuple, Set
 
-# Windows-specific imports
-import ctypes
-import win32pipe
-import win32file
-import pywintypes
-import wmi
+# Windows-specific imports with error handling
+try:
+    import ctypes
+    import win32pipe
+    import win32file
+    import pywintypes
+    import wmi
+except ImportError as e:
+    print(f"Error: Required Windows module not found: {e}")
+    print("Please install dependencies: pip install -r requirements.txt")
+    print("Required packages: WMI, pywin32")
+    sys.exit(1)
+
+# Import power source detection
+try:
+    from PowerSourceDetection import PowerSourceDetector
+except ImportError:
+    PowerSourceDetector = None
+    print("Warning: PowerSourceDetection module not found")
 
 # Constants
 VERSION = "0.4.6"
@@ -996,21 +1008,13 @@ class DAMXDaemon:
             # Initialize DAMXManager
             self.manager = DAMXManager()
 
-            # Initialize keyboard monitor early
-            # self.keyboard_monitor = KeyboardMonitor(
-            #     target_keycode=425, 
-            #     command_to_run="DAMX",  # Updated command
-            #     logger=log
-            # )
-            # kb_success = self.keyboard_monitor.start_monitoring()
-            
-            # if not kb_success:
-            #     log.error("Failed to start keyboard monitoring")
-            #     # Don't return False here - continue with reduced functionality
-
-            # Initialize power monitor
-            self.power_monitor = PowerSourceDetector(self.manager)
-            self.power_monitor.start_monitoring()
+            # Initialize power monitor if available
+            if PowerSourceDetector is not None:
+                self.power_monitor = PowerSourceDetector(self.manager)
+                self.power_monitor.start_monitoring()
+            else:
+                log.warning("Power source detection not available")
+                self.power_monitor = None
 
             # Log detected features
             features_str = ", ".join(sorted(self.manager.available_features))

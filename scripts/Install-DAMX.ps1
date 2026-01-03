@@ -234,7 +234,7 @@ if ($Uninstall) {
     Uninstall-DAMX
 } else {
     # Check for Acer laptop
-    $computerSystem = Get-WmiObject Win32_ComputerSystem
+    $computerSystem = Get-CimInstance Win32_ComputerSystem
     $manufacturer = $computerSystem.Manufacturer
     
     if ($manufacturer -notlike "*Acer*") {
